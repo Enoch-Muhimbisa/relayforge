@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -12,7 +13,22 @@ import (
 )
 
 func main() {
-	repo := store.NewMemory()
+	var repo store.Repository
+	closeStore := func() {}
+	if databaseURL := os.Getenv("RELAYFORGE_DATABASE_URL"); databaseURL != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		persistent, err := store.NewPostgres(ctx, databaseURL)
+		if err != nil { log.Fatalf("initialize PostgreSQL storage: %v", err) }
+		repo = persistent
+		closeStore = persistent.Close
+		log.Printf("storage=postgres")
+	} else {
+		repo = store.NewMemory()
+		log.Printf("storage=memory (run history will not survive restart)")
+	}
+	defer closeStore()
+
 	executor := engine.New(repo, engine.Config{MaxConcurrent: 4, RetryLimit: 2, RetryDelay: 250 * time.Millisecond})
 	defer executor.Close()
 	addr := os.Getenv("RELAYFORGE_ADDR")
