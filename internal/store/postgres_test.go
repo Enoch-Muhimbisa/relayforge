@@ -38,6 +38,7 @@ func TestPostgresRunSurvivesStoreReopen(t *testing.T) {
 	if got.ID != run.ID || got.WorkflowID != run.WorkflowID || got.Status != workflow.StatusQueued {
 		t.Fatalf("persisted run mismatch: got %+v", got)
 	}
+	if len(got.StepResults) != 1 || got.StepResults[0].IdempotencyKey != "rf1_checkpoint-persisted" { t.Fatalf("step checkpoint did not survive store reopen: %+v", got.StepResults) }
 	// Keep this fixture out of the pending queue for subsequent lease tests.
 	got.Status = workflow.StatusSucceeded
 	got.FinishedAt = time.Now().UTC()
