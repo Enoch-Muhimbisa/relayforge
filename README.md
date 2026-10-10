@@ -10,7 +10,7 @@ RelayForge pairs a Go execution core with a purpose-built operator console. The 
 - Asynchronous workflow runs with bounded concurrent admission.
 - Dependency-aware step execution, retries, step timeouts, and recorded outcomes.
 - Versioned HTTP API for workflow definitions and run inspection.
-- Optional PostgreSQL-backed run history and step-result snapshots, including startup schema creation and query indexes.
+- PostgreSQL-backed run history, step-result snapshots, expiring worker leases, stale-worker fencing, and automatic reclaim of abandoned runs.
 - React + TypeScript control room with workflow inspection, execution ledger, API connection state, and per-run step trace.
 - Go race tests, static analysis, and frontend build in GitHub Actions.
 
@@ -41,9 +41,9 @@ For a memory-only API, unset `RELAYFORGE_DATABASE_URL` and run `go mod tidy && g
 
 ## Engineering honesty
 
-**RelayForge is still an early-stage, single-process executor.** PostgreSQL preserves run history and step snapshots, but active work is not yet resumed after a process crash. The project does not yet have a distributed worker fleet, durable leases, authentication, or multi-tenant authorization. Workflow definitions remain a built-in catalog.
+**RelayForge is an early-stage at-least-once workflow engine.** PostgreSQL-backed workers coordinate through atomic claims and expiring leases; queued work and runs with expired leases can be reclaimed after a restart. Recovery replays a run from the beginning, so side effects may repeat. The project does not yet have authentication, multi-tenant authorization, dynamic workflow definitions, or production-grade external task handlers. Workflow definitions remain a built-in catalog.
 
-The next milestone is durable worker claiming and recovery semantics, backed by integration tests against a real PostgreSQL service. See [the architecture notes](docs/architecture.md) for guarantees and limitations.
+Worker claiming, lease expiry, stale-worker fencing, and PostgreSQL recovery integration tests are implemented. Next: idempotency keys and per-step durable checkpoints so recovery can resume more precisely instead of replaying the entire run. See [the architecture notes](docs/architecture.md) for guarantees and limitations.
 
 ## Engineering priorities
 
