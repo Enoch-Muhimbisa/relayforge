@@ -1,3 +1,3 @@
-module github.com/redeemedwinner92-dotcom/relayforge
+module github.com/Enoch-Muhimbisa/relayforge
 
 go 1.23
