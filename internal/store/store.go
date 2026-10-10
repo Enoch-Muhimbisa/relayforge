@@ -2,11 +2,17 @@ package store
 
 import (
 	"errors"
+	"context"
+	"time"
 	"sort"
 	"sync"
 	"github.com/Enoch-Muhimbisa/relayforge/internal/workflow"
 )
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound = errors.New("not found")
+	ErrNoPendingRun = errors.New("no pending run")
+	ErrLeaseLost = errors.New("run lease lost")
+)
 type Repository interface {
 	ListWorkflows() []workflow.Definition
 	GetWorkflow(string) (workflow.Definition,error)
@@ -14,10 +20,13 @@ type Repository interface {
 	GetRun(string) (workflow.Run,error)
 	ListRuns(int) []workflow.Run
 	UpdateRun(workflow.Run) error
+	ClaimRun(context.Context, string, time.Duration) (workflow.Run, error)
+	UpdateClaimedRun(workflow.Run, string, time.Duration) error
 }
-type Memory struct { mu sync.RWMutex; workflows map[string]workflow.Definition; runs map[string]workflow.Run }
+type runLease struct { workerID string; until time.Time; duration time.Duration }
+type Memory struct { mu sync.RWMutex; workflows map[string]workflow.Definition; runs map[string]workflow.Run; leases map[string]runLease }
 func NewMemory()*Memory{
-	m:=&Memory{workflows:map[string]workflow.Definition{},runs:map[string]workflow.Run{}}
+	m:=&Memory{workflows:map[string]workflow.Definition{},runs:map[string]workflow.Run{},leases:map[string]runLease{}}
 	for _,d:=range catalog(){m.workflows[d.ID]=d};return m
 }
 func(m *Memory)ListWorkflows()[]workflow.Definition{m.mu.RLock();defer m.mu.RUnlock();out:=make([]workflow.Definition,0,len(m.workflows));for _,v:=range m.workflows{out=append(out,v)};sort.Slice(out,func(i,j int)bool{return out[i].ID<out[j].ID});return out}
@@ -45,3 +54,50 @@ func catalog()[]workflow.Definition{return []workflow.Definition{
 {ID:"record",Name:"Record observation",Kind:"task",DependsOn:[]string{"settle"},Config:map[string]string{"message":"Observation recorded"}},
 }},
 }}
+
+
+// ClaimRun atomically leases the oldest queued run or reclaims an expired lease.
+func (m *Memory) ClaimRun(ctx context.Context, workerID string, leaseDuration time.Duration) (workflow.Run, error) {
+	if err := ctx.Err(); err != nil { return workflow.Run{}, err }
+	if leaseDuration <= 0 { leaseDuration = 2 * time.Minute }
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var selected workflow.Run
+	found := false
+	for _, candidate := range m.runs {
+		lease, leased := m.leases[candidate.ID]
+		eligible := candidate.Status == workflow.StatusQueued || (candidate.Status == workflow.StatusRunning && (!leased || !time.Now().Before(lease.until)))
+		if !eligible { continue }
+		if !found || candidate.CreatedAt.Before(selected.CreatedAt) {
+			selected, found = candidate, true
+		}
+	}
+	if !found { return workflow.Run{}, ErrNoPendingRun }
+	selected.Status = workflow.StatusRunning
+	if selected.StartedAt.IsZero() { selected.StartedAt = time.Now().UTC() }
+	selected.StepResults = append([]workflow.StepResult(nil), selected.StepResults...)
+	m.runs[selected.ID] = selected
+	m.leases[selected.ID] = runLease{workerID: workerID, until: time.Now().Add(leaseDuration), duration: leaseDuration}
+	return selected, nil
+}
+
+// UpdateClaimedRun fences stale workers and renews a live lease on each checkpoint.
+func (m *Memory) UpdateClaimedRun(run workflow.Run, workerID string, leaseDuration time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease, ok := m.leases[run.ID]
+	if !ok || lease.workerID != workerID || !time.Now().Before(lease.until) {
+		return ErrLeaseLost
+	}
+	run.StepResults = append([]workflow.StepResult(nil), run.StepResults...)
+	m.runs[run.ID] = run
+	if run.Status == workflow.StatusRunning {
+		if leaseDuration <= 0 { leaseDuration = lease.duration }
+		lease.duration = leaseDuration
+		lease.until = time.Now().Add(leaseDuration)
+		m.leases[run.ID] = lease
+	} else {
+		delete(m.leases, run.ID)
+	}
+	return nil
+}
