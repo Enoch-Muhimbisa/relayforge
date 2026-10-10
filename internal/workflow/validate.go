@@ -20,6 +20,7 @@ func Validate(def Definition) ([]Step, error) {
 		byID[step.ID] = step
 	}
 	indegree := make(map[string]int, len(byID))
+	for id := range byID { indegree[id] = 0 }
 	children := make(map[string][]string, len(byID))
 	for _, step := range def.Steps {
 		seen := map[string]bool{}
