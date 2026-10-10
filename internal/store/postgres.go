@@ -78,3 +78,54 @@ func (p *Postgres) UpdateRun(run workflow.Run) error {
     tag, err := p.pool.Exec(ctx, "UPDATE relayforge_runs SET status=$2, payload=$3 WHERE id=$1", run.ID, run.Status, payload)
     if err != nil { return fmt.Errorf("update run: %w", err) }; if tag.RowsAffected() == 0 { return ErrNotFound }; return nil
 }
+
+
+// ClaimRun uses row-level locking to claim queued work or reclaim an expired worker lease.
+// SKIP LOCKED allows multiple API/worker processes to compete without double-claiming a row.
+func (p *Postgres) ClaimRun(ctx context.Context, workerID string, leaseDuration time.Duration) (workflow.Run, error) {
+	if leaseDuration <= 0 { leaseDuration = 2 * time.Minute }
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil { return workflow.Run{}, fmt.Errorf("begin run claim: %w", err) }
+	defer tx.Rollback(ctx)
+
+	var id string
+	var payload []byte
+	err = tx.QueryRow(ctx, `SELECT id, payload FROM relayforge_runs
+		WHERE status = 'queued'
+		   OR (status = 'running' AND (lease_until IS NULL OR lease_until <= now()))
+		ORDER BY created_at ASC
+		LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &payload)
+	if errors.Is(err, pgx.ErrNoRows) { return workflow.Run{}, ErrNoPendingRun }
+	if err != nil { return workflow.Run{}, fmt.Errorf("select pending run: %w", err) }
+	var run workflow.Run
+	if err := json.Unmarshal(payload, &run); err != nil { return workflow.Run{}, fmt.Errorf("decode pending run: %w", err) }
+	run.Status = workflow.StatusRunning
+	if run.StartedAt.IsZero() { run.StartedAt = time.Now().UTC() }
+	payload, err = json.Marshal(run)
+	if err != nil { return workflow.Run{}, fmt.Errorf("encode claimed run: %w", err) }
+	_, err = tx.Exec(ctx, `UPDATE relayforge_runs
+		SET status = 'running', worker_id = $2,
+		    lease_until = now() + ($3 * interval '1 second'), payload = $4
+		WHERE id = $1`, id, workerID, leaseDuration.Seconds(), payload)
+	if err != nil { return workflow.Run{}, fmt.Errorf("assign run lease: %w", err) }
+	if err := tx.Commit(ctx); err != nil { return workflow.Run{}, fmt.Errorf("commit run claim: %w", err) }
+	return run, nil
+}
+
+// UpdateClaimedRun rejects writes from a worker whose lease has expired or been reclaimed.
+func (p *Postgres) UpdateClaimedRun(run workflow.Run, workerID string, leaseDuration time.Duration) error {
+	if leaseDuration <= 0 { leaseDuration = 2 * time.Minute }
+	payload, err := json.Marshal(run)
+	if err != nil { return fmt.Errorf("encode claimed run: %w", err) }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := p.pool.Exec(ctx, `UPDATE relayforge_runs
+		SET status = $2, payload = $3,
+		    worker_id = CASE WHEN $2 = 'running' THEN worker_id ELSE NULL END,
+		    lease_until = CASE WHEN $2 = 'running' THEN now() + ($5 * interval '1 second') ELSE NULL END
+		WHERE id = $1 AND worker_id = $4 AND status = 'running' AND lease_until > now()`,
+		run.ID, run.Status, payload, workerID, leaseDuration.Seconds())
+	if err != nil { return fmt.Errorf("checkpoint claimed run: %w", err) }
+	if result.RowsAffected() == 0 { return ErrLeaseLost }
+	return nil
+}
