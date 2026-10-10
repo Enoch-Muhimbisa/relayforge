@@ -38,6 +38,10 @@ func TestPostgresRunSurvivesStoreReopen(t *testing.T) {
 	if got.ID != run.ID || got.WorkflowID != run.WorkflowID || got.Status != workflow.StatusQueued {
 		t.Fatalf("persisted run mismatch: got %+v", got)
 	}
+	// Keep this fixture out of the pending queue for subsequent lease tests.
+	got.Status = workflow.StatusSucceeded
+	got.FinishedAt = time.Now().UTC()
+	if err := second.UpdateRun(got); err != nil { t.Fatal(err) }
 }
 
 
