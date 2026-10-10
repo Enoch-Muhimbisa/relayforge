@@ -84,7 +84,9 @@ func TestRecoverySkipsCheckpointedStepsAndReusesIdempotencyKey(t *testing.T) {
 			defer executor.mu.Unlock()
 			if executor.calls["lint"] != 0 { t.Fatalf("checkpointed lint step executed %d times", executor.calls["lint"]) }
 			if executor.calls["unit"] != 1 { t.Fatalf("recovered unit step executed %d times", executor.calls["unit"]) }
-			if got.StepResults[1].IdempotencyKey != stepIdempotencyKey(runID, "unit") { t.Fatalf("unit idempotency key changed: %q", got.StepResults[1].IdempotencyKey) }
+			unitKey := ""
+			for _, result := range got.StepResults { if result.StepID == "unit" { unitKey = result.IdempotencyKey } }
+			if unitKey != stepIdempotencyKey(runID, "unit") { t.Fatalf("unit idempotency key changed: %q", unitKey) }
 			for _, result := range got.StepResults {
 				if result.Status != workflow.StatusSucceeded { t.Fatalf("step %q ended %q", result.StepID, result.Status) }
 				if result.IdempotencyKey == "" { t.Fatalf("step %q has no idempotency key", result.StepID) }
