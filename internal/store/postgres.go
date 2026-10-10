@@ -30,20 +30,63 @@ func NewPostgres(ctx context.Context, databaseURL string) (*Postgres, error) {
 
 func (p *Postgres) Close() { p.pool.Close() }
 
+type schemaMigration struct {
+	version int
+	name string
+	statements []string
+}
+
+var schemaMigrations = []schemaMigration{
+	{version: 1, name: "run history", statements: []string{
+		"CREATE TABLE IF NOT EXISTS relayforge_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL)",
+		"CREATE INDEX IF NOT EXISTS relayforge_runs_created_at_idx ON relayforge_runs (created_at DESC)",
+		"CREATE INDEX IF NOT EXISTS relayforge_runs_status_idx ON relayforge_runs (status)",
+	}},
+	{version: 2, name: "worker leases", statements: []string{
+		"ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS worker_id TEXT",
+		"ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ",
+		"CREATE INDEX IF NOT EXISTS relayforge_runs_lease_until_idx ON relayforge_runs (lease_until) WHERE status = 'running'",
+	}},
+}
+
 func (p *Postgres) migrate(ctx context.Context) error {
-    _, err := p.pool.Exec(ctx, "CREATE TABLE IF NOT EXISTS relayforge_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL)")
-    if err != nil { return fmt.Errorf("migrate RelayForge run table: %w", err) }
-    _, err = p.pool.Exec(ctx, "ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS worker_id TEXT")
-    if err != nil { return fmt.Errorf("add RelayForge worker lease owner: %w", err) }
-    _, err = p.pool.Exec(ctx, "ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ")
-    if err != nil { return fmt.Errorf("add RelayForge worker lease expiry: %w", err) }
-    _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_created_at_idx ON relayforge_runs (created_at DESC)")
-    if err != nil { return fmt.Errorf("index RelayForge run history: %w", err) }
-    _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_status_idx ON relayforge_runs (status)")
-    if err != nil { return fmt.Errorf("index RelayForge run status: %w", err) }
-    _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_lease_until_idx ON relayforge_runs (lease_until) WHERE status = 'running'")
-    if err != nil { return fmt.Errorf("index RelayForge worker leases: %w", err) }
-    return nil
+	_, err := p.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS relayforge_schema_migrations (
+		version INTEGER PRIMARY KEY,
+		name TEXT NOT NULL,
+		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`)
+	if err != nil { return fmt.Errorf("create schema migration ledger: %w", err) }
+
+	for _, migration := range schemaMigrations {
+		tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+		if err != nil { return fmt.Errorf("begin schema migration %d: %w", migration.version, err) }
+		if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(719304881)"); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("lock schema migrations: %w", err)
+		}
+		var applied bool
+		err = tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM relayforge_schema_migrations WHERE version = $1)", migration.version).Scan(&applied)
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("check schema migration %d: %w", migration.version, err)
+		}
+		if applied {
+			if err := tx.Commit(ctx); err != nil { return fmt.Errorf("finish schema migration check %d: %w", migration.version, err) }
+			continue
+		}
+		for _, statement := range migration.statements {
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				_ = tx.Rollback(ctx)
+				return fmt.Errorf("apply schema migration %d (%s): %w", migration.version, migration.name, err)
+			}
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO relayforge_schema_migrations (version, name) VALUES ($1, $2)", migration.version, migration.name); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("record schema migration %d: %w", migration.version, err)
+		}
+		if err := tx.Commit(ctx); err != nil { return fmt.Errorf("commit schema migration %d: %w", migration.version, err) }
+	}
+	return nil
 }
 
 func (p *Postgres) ListWorkflows() []workflow.Definition { return catalog() }
