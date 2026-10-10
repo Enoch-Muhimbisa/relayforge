@@ -10,7 +10,8 @@ RelayForge pairs a Go execution core with a purpose-built operator console. The 
 - Asynchronous workflow runs with bounded concurrent admission.
 - Dependency-aware step execution, retries, step timeouts, and recorded outcomes.
 - Versioned HTTP API for workflow definitions and run inspection.
-- PostgreSQL-backed run history, step-result snapshots, expiring worker leases, stale-worker fencing, and automatic reclaim of abandoned runs.
+- PostgreSQL-backed run history with transactional, versioned schema migrations.
+- Durable per-step checkpoints, stable idempotency keys, expiring worker leases, stale-worker fencing, and automatic reclaim of abandoned runs.
 - React + TypeScript control room with workflow inspection, execution ledger, API connection state, and per-run step trace.
 - Go race tests, static analysis, and frontend build in GitHub Actions.
 
@@ -41,9 +42,9 @@ For a memory-only API, unset `RELAYFORGE_DATABASE_URL` and run `go mod tidy && g
 
 ## Engineering honesty
 
-**RelayForge is an early-stage at-least-once workflow engine.** PostgreSQL-backed workers coordinate through atomic claims and expiring leases; queued work and runs with expired leases can be reclaimed after a restart. Recovery replays a run from the beginning, so side effects may repeat. The project does not yet have authentication, multi-tenant authorization, dynamic workflow definitions, or production-grade external task handlers. Workflow definitions remain a built-in catalog.
+**RelayForge is an early-stage at-least-once workflow engine.** PostgreSQL-backed workers coordinate through atomic claims and expiring leases; queued work and runs with expired leases can be reclaimed after a restart. Recovery skips successfully checkpointed steps and retries interrupted steps with the same stable idempotency key. A crash after an external side effect but before its success checkpoint can still repeat that operation unless the downstream handler honors the key. The project does not yet have authentication, multi-tenant authorization, dynamic workflow definitions, or production-grade external task handlers. Workflow definitions remain a built-in catalog.
 
-Worker claiming, lease expiry, stale-worker fencing, and PostgreSQL recovery integration tests are implemented. Next: idempotency keys and per-step durable checkpoints so recovery can resume more precisely instead of replaying the entire run. See [the architecture notes](docs/architecture.md) for guarantees and limitations.
+Worker claiming, lease expiry, stale-worker fencing, durable step checkpoints, stable per-step idempotency keys, transactional schema migrations, and failure/recovery tests are implemented. External handlers must pass the provided key to downstream systems that support deduplication; RelayForge cannot guarantee exactly-once side effects by itself. See [the architecture notes](docs/architecture.md) for guarantees and limitations.
 
 ## Engineering priorities
 
