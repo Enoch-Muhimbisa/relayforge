@@ -13,6 +13,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
+          cache: false
       - run: go test -race -cover ./...
       - run: go vet ./...
   web:
