@@ -12,7 +12,7 @@ Workflow definitions are currently a built-in, versioned catalog. They are not d
 ## Components
 
 - `internal/workflow`: workflow model and deterministic DAG validation.
-- `internal/engine`: bounded run concurrency, dependency-aware step execution, step timeouts, retry policy, and recorded outcomes.
+- `internal/engine`: fixed worker pools, dependency-aware step execution, step timeouts, retry policy, lease checkpoints, and recorded outcomes.
 - `internal/store`: repository interface, in-memory adapter, and PostgreSQL run-history adapter.
 - `internal/api`: versioned HTTP API, JSON errors, and baseline browser security headers.
 - `web`: React/TypeScript operator console.
@@ -23,14 +23,16 @@ Workflow definitions are currently a built-in, versioned catalog. They are not d
 - Root steps are included in deterministic topological ordering.
 - A dependent step only runs after all dependencies succeeded; downstream steps are marked cancelled when a dependency fails.
 - PostgreSQL persists run snapshots and step outcomes across API restarts.
-- The current engine is still a **single-process executor**. PostgreSQL persistence is not the same as durable distributed execution: queued/running work is not automatically recovered after a crash, and workers do not claim leases.
-- Current `task` steps are local demonstrations, not arbitrary user code or a distributed worker fleet.
-- Retries can repeat side effects; real task handlers must be idempotent.
-- Authentication, multi-tenant isolation, distributed leases, crash recovery, and operator-level authorization remain future work.
+- Workers claim queued runs in a transaction using `FOR UPDATE SKIP LOCKED`; each claim has an expiring lease and a worker owner.
+- Each checkpoint renews the lease. Updates from a worker whose lease expired or was reclaimed are rejected, preventing stale workers from overwriting a newer owner's state.
+- A process restart can reclaim queued work and running work whose lease expired. Recovery replays a run from its first step; completed external side effects may therefore be repeated.
+- This is **at-least-once execution**, not exactly-once execution. Real task handlers must be idempotent or use their own deduplication keys.
+- Current `task` steps are local demonstrations, not arbitrary user code. Worker processes can coordinate through PostgreSQL, but this is not yet a hardened production worker fleet.
+- Authentication, multi-tenant isolation, dynamic workflow definitions, operator-level authorization, and versioned schema migrations remain future work.
 
 ## Database schema
 
-Startup creates `relayforge_runs` and indexes for creation time and status. The JSONB payload preserves the complete run snapshot while relational columns support identity and common history queries. Schema creation is idempotent; production deployment should evolve this into versioned migrations before making incompatible schema changes.
+Startup creates `relayforge_runs` and indexes for creation time, status, and active lease expiry. Relational `worker_id` and `lease_until` columns coordinate worker ownership while the JSONB payload preserves the complete run snapshot. Startup migrations add lease columns idempotently to existing installations; production deployment should evolve this into versioned migrations before making incompatible schema changes.
 
 ## Run locally
 
