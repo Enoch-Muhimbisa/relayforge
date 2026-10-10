@@ -1,0 +1,3 @@
+package api
+import("net/http";"net/http/httptest";"testing";"github.com/redeemedwinner92-dotcom/relayforge/internal/engine";"github.com/redeemedwinner92-dotcom/relayforge/internal/store")
+func TestAPIHealthCatalogAndMissingWorkflow(t *testing.T){repo:=store.NewMemory();e:=engine.New(repo,engine.Config{});defer e.Close();h:=New(repo,e).Handler();for _,tc:=range []struct{path string;want int}{{"/api/v1/health",200},{"/api/v1/workflows",200},{"/api/v1/workflows/missing",404}}{rec:=httptest.NewRecorder();h.ServeHTTP(rec,httptest.NewRequest(http.MethodGet,tc.path,nil));if rec.Code!=tc.want{t.Errorf("%s: got %d want %d",tc.path,rec.Code,tc.want)};if rec.Header().Get("X-Content-Type-Options")!="nosniff"{t.Error("missing security header")}}}
