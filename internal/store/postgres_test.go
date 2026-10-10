@@ -25,7 +25,7 @@ func TestPostgresRunSurvivesStoreReopen(t *testing.T) {
 		WorkflowName: "Release readiness",
 		Status: workflow.StatusQueued,
 		CreatedAt: time.Now().UTC(),
-		StepResults: []workflow.StepResult{},
+		StepResults: []workflow.StepResult{{StepID: "lint", Status: workflow.StatusSucceeded, Attempt: 1, IdempotencyKey: "rf1_checkpoint-persisted", Output: "checkpointed"}},
 	}
 	if err := first.CreateRun(run); err != nil { first.Close(); t.Fatal(err) }
 	first.Close()
