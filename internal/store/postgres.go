@@ -33,10 +33,16 @@ func (p *Postgres) Close() { p.pool.Close() }
 func (p *Postgres) migrate(ctx context.Context) error {
     _, err := p.pool.Exec(ctx, "CREATE TABLE IF NOT EXISTS relayforge_runs (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, payload JSONB NOT NULL)")
     if err != nil { return fmt.Errorf("migrate RelayForge run table: %w", err) }
+    _, err = p.pool.Exec(ctx, "ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS worker_id TEXT")
+    if err != nil { return fmt.Errorf("add RelayForge worker lease owner: %w", err) }
+    _, err = p.pool.Exec(ctx, "ALTER TABLE relayforge_runs ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ")
+    if err != nil { return fmt.Errorf("add RelayForge worker lease expiry: %w", err) }
     _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_created_at_idx ON relayforge_runs (created_at DESC)")
     if err != nil { return fmt.Errorf("index RelayForge run history: %w", err) }
     _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_status_idx ON relayforge_runs (status)")
     if err != nil { return fmt.Errorf("index RelayForge run status: %w", err) }
+    _, err = p.pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS relayforge_runs_lease_until_idx ON relayforge_runs (lease_until) WHERE status = 'running'")
+    if err != nil { return fmt.Errorf("index RelayForge worker leases: %w", err) }
     return nil
 }
 
