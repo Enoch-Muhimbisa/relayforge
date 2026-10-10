@@ -10,30 +10,23 @@ RelayForge pairs a Go execution core with a purpose-built operator console. The 
 - Asynchronous workflow runs with bounded concurrent admission.
 - Dependency-aware step execution, retries, step timeouts, and recorded outcomes.
 - Versioned HTTP API for workflow definitions and run inspection.
-- React + TypeScript control room with a workflow inspector, execution ledger, live API connection state, and per-run step trace.
-- Go unit tests and a GitHub Actions CI workflow.
+- Optional PostgreSQL-backed run history and step-result snapshots, including startup schema creation and query indexes.
+- React + TypeScript control room with workflow inspection, execution ledger, API connection state, and per-run step trace.
+- Go race tests, static analysis, and frontend build in GitHub Actions.
 
-## Start locally
+## Start the full stack
 
-Requirements: Go 1.23+ and Node.js 20+.
-
-Terminal 1:
-
-```sh
-go mod download
-go test ./...
-go run ./cmd/relayforge
-```
-
-Terminal 2:
+Requirements: Docker Compose.
 
 ```sh
-cd web
-npm install
-npm run dev
+# Optional: replace the local-development password before starting
+export RELAYFORGE_DB_PASSWORD='use-a-strong-local-password'
+docker compose up --build
 ```
 
-Open http://localhost:5173. The API listens on http://localhost:8080 by default. To change the API URL for the console, set `VITE_API_URL` before starting Vite.
+Open http://localhost:5173 for the console and http://localhost:8080 for the API. PostgreSQL data is stored in the named `relayforge_postgres` volume.
+
+For a memory-only API, unset `RELAYFORGE_DATABASE_URL` and run `go mod tidy && go test -race ./... && go vet ./... && go run ./cmd/relayforge`.
 
 ## API
 
@@ -46,16 +39,16 @@ Open http://localhost:5173. The API listens on http://localhost:8080 by default.
 | GET | `/api/v1/runs?limit=50` | List recent runs |
 | GET | `/api/v1/runs/{id}` | Inspect one run |
 
-## Architecture honesty
+## Engineering honesty
 
-**This is an early milestone, not a production-ready distributed platform.** Execution currently happens in one process and run state lives in memory. Restarting the service loses run history. The step runner uses local demonstration tasks; there is no distributed worker fleet, PostgreSQL persistence, durable leases, authentication, or crash recovery yet.
+**RelayForge is still an early-stage, single-process executor.** PostgreSQL preserves run history and step snapshots, but active work is not yet resumed after a process crash. The project does not yet have a distributed worker fleet, durable leases, authentication, or multi-tenant authorization. Workflow definitions remain a built-in catalog.
 
-See [the architecture notes](docs/architecture.md) for current guarantees, limitations, and the planned evolution toward PostgreSQL-backed state, lease-based workers, telemetry, and access controls.
+The next milestone is durable worker claiming and recovery semantics, backed by integration tests against a real PostgreSQL service. See [the architecture notes](docs/architecture.md) for guarantees and limitations.
 
 ## Engineering priorities
 
 1. Make state transitions and failure semantics testable.
-2. Add durable storage before claiming recovery guarantees.
+2. Separate durable orchestration state from worker execution.
 3. Treat retries and side effects explicitly; task handlers must be idempotent where needed.
 4. Keep the operator console grounded in API data rather than fabricated metrics.
 5. Publish benchmarks only with reproducible workloads and documented test conditions.
