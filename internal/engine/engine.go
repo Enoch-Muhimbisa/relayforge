@@ -2,10 +2,11 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
-	"github.com/google/uuid"
 	"github.com/redeemedwinner92-dotcom/relayforge/internal/store"
 	"github.com/redeemedwinner92-dotcom/relayforge/internal/workflow"
 )
@@ -13,7 +14,7 @@ type Config struct{MaxConcurrent int;RetryLimit int;RetryDelay time.Duration}
 type Engine struct{repo store.Repository;cfg Config;slots chan struct{};ctx context.Context;cancel context.CancelFunc;wg sync.WaitGroup}
 func New(repo store.Repository,cfg Config)*Engine{if cfg.MaxConcurrent<1{cfg.MaxConcurrent=1};if cfg.RetryLimit<0{cfg.RetryLimit=0};ctx,cancel:=context.WithCancel(context.Background());return &Engine{repo:repo,cfg:cfg,slots:make(chan struct{},cfg.MaxConcurrent),ctx:ctx,cancel:cancel}}
 func(e *Engine)Close(){e.cancel();e.wg.Wait()}
-func(e *Engine)Start(id string)(workflow.Run,error){def,err:=e.repo.GetWorkflow(id);if err!=nil{return workflow.Run{},err};if _,err=workflow.Validate(def);err!=nil{return workflow.Run{},err};run:=workflow.Run{ID:uuid.NewString(),WorkflowID:def.ID,WorkflowName:def.Name,Status:workflow.StatusQueued,CreatedAt:time.Now().UTC(),StepResults:[]workflow.StepResult{}};if err=e.repo.CreateRun(run);err!=nil{return workflow.Run{},err};e.wg.Add(1);go func(){defer e.wg.Done();e.execute(def,run.ID)}();return run,nil}
+func(e *Engine)Start(id string)(workflow.Run,error){def,err:=e.repo.GetWorkflow(id);if err!=nil{return workflow.Run{},err};if _,err=workflow.Validate(def);err!=nil{return workflow.Run{},err};idBytes:=make([]byte,16);if _,err:=rand.Read(idBytes);err!=nil{return workflow.Run{},fmt.Errorf("generate run id: %w",err)};run:=workflow.Run{ID:hex.EncodeToString(idBytes),WorkflowID:def.ID,WorkflowName:def.Name,Status:workflow.StatusQueued,CreatedAt:time.Now().UTC(),StepResults:[]workflow.StepResult{}};if err=e.repo.CreateRun(run);err!=nil{return workflow.Run{},err};e.wg.Add(1);go func(){defer e.wg.Done();e.execute(def,run.ID)}();return run,nil}
 func(e *Engine)execute(def workflow.Definition,id string){
 	select{case e.slots<-struct{}{}:case <-e.ctx.Done():return};defer func(){<-e.slots}()
 	run,err:=e.repo.GetRun(id);if err!=nil{return};run.Status=workflow.StatusRunning;run.StartedAt=time.Now().UTC();_ = e.repo.UpdateRun(run)
