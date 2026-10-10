@@ -7,7 +7,7 @@ RelayForge begins as a single-process execution service backed by a thread-safe 
 - `internal/workflow`: workflow model and deterministic DAG validation.
 - `internal/engine`: bounded run concurrency, dependency-aware step execution, step timeouts, retry policy, and recorded outcomes.
 - `internal/store`: repository contract and in-memory implementation.
-- `internal/api`: versioned HTTP API, JSON errors, request logging, and baseline browser security headers.
+- `internal/api`: versioned HTTP API, JSON errors, and baseline browser security headers.
 
 ## Guarantees
 
