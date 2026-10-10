@@ -25,14 +25,16 @@ Workflow definitions are currently a built-in, versioned catalog. They are not d
 - PostgreSQL persists run snapshots and step outcomes across API restarts.
 - Workers claim queued runs in a transaction using `FOR UPDATE SKIP LOCKED`; each claim has an expiring lease and a worker owner.
 - Each checkpoint renews the lease. Updates from a worker whose lease expired or was reclaimed are rejected, preventing stale workers from overwriting a newer owner's state.
-- A process restart can reclaim queued work and running work whose lease expired. Recovery replays a run from its first step; completed external side effects may therefore be repeated.
-- This is **at-least-once execution**, not exactly-once execution. Real task handlers must be idempotent or use their own deduplication keys.
+- Every step has a stable idempotency key derived from the run ID and step ID. Retries and crash recovery reuse the same key.
+- A running checkpoint is persisted before invoking a handler; successful results are persisted after the handler returns. On recovery, succeeded steps are skipped and interrupted steps are retried.
+- A crash after an external side effect but before the success checkpoint can still repeat that operation. External handlers should pass the stable key to downstream services that support deduplication.
+- This is **at-least-once execution**, not exactly-once execution. RelayForge cannot guarantee exactly-once side effects when an external system does not participate in idempotency.
 - Current `task` steps are local demonstrations, not arbitrary user code. Worker processes can coordinate through PostgreSQL, but this is not yet a hardened production worker fleet.
 - Authentication, multi-tenant isolation, dynamic workflow definitions, operator-level authorization, and versioned schema migrations remain future work.
 
 ## Database schema
 
-Startup creates `relayforge_runs` and indexes for creation time, status, and active lease expiry. Relational `worker_id` and `lease_until` columns coordinate worker ownership while the JSONB payload preserves the complete run snapshot. Startup migrations add lease columns idempotently to existing installations; production deployment should evolve this into versioned migrations before making incompatible schema changes.
+The `relayforge_schema_migrations` ledger records applied schema versions. Migrations run transactionally and use a PostgreSQL advisory transaction lock to serialize concurrent application startup. Version 1 creates the run-history table and indexes; version 2 adds lease-owner and lease-expiry columns and an index. The JSONB payload preserves the complete run snapshot, including step checkpoints and idempotency keys. Add a new numbered migration for future schema changes rather than editing already-applied migrations.
 
 ## Run locally
 
