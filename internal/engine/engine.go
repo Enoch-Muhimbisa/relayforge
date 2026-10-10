@@ -142,7 +142,7 @@ func (e *Engine) execute(run workflow.Run, workerID string) {
 		previous := results[step.ID]
 		results[step.ID] = workflow.StepResult{
 			StepID: step.ID, Status: workflow.StatusRunning,
-			StartedAt: time.Now().UTC(), Attempt: previous.Attempt,
+			StartedAt: time.Now().UTC(), Attempt: previous.Attempt + 1,
 			IdempotencyKey: key,
 		}
 		run.StepResults = ordered(order, results)
