@@ -30,6 +30,7 @@ type StepResult struct {
 	StartedAt time.Time `json:"startedAt,omitempty"`
 	FinishedAt time.Time `json:"finishedAt,omitempty"`
 	Attempt int `json:"attempt"`
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	Output string `json:"output,omitempty"`
 	Error string `json:"error,omitempty"`
 }
